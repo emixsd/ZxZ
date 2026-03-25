@@ -45,7 +45,7 @@ async function registrarDocumentoEnviado(ticketId, { signUrl, docToken }) {
     `🔗 Link de assinatura: ${signUrl}`,
     `📋 Token do documento: ${docToken}`,
     '',
-    'O cliente receberá o link por e-mail automaticamente.',
+    'O cliente receberá o link por e-mail ou Wpp automaticamente.',
   ].join('\n');
 
   return atualizarTicket(ticketId, {

@@ -1,5 +1,5 @@
 const express = require("express");
-const crypto = require("crypto");
+const crypto = require("crypto"); // usado em validateWebhookSecret e validateZapSignSignature
 const rateLimit = require("express-rate-limit");
 const { config } = require("./config");
 const { createDocumentFromTemplate } = require("./zapsign");
@@ -26,14 +26,50 @@ const webhookLimiter = rateLimit({
   message: { error: "Rate limit excedido no webhook." },
 });
 
-// ─── Validação do Webhook Secret ─────────────────────────────────────────────
+// ─── Validação do Webhook Secret (Zendesk) ───────────────────────────────────
+// Usa timingSafeEqual para evitar timing attacks (comparação de string comum
+// pode vazar o tamanho do secret por diferença de tempo de resposta)
 function validateWebhookSecret(req, res, next) {
   const incomingSecret = req.headers["x-webhook-secret"];
-  if (!incomingSecret || incomingSecret !== config.WEBHOOK_SECRET) {
-    auditLog("WARN", "webhook_rejected", {
-      ip: req.ip,
-      reason: "Invalid webhook secret",
-    });
+  if (!incomingSecret) {
+    auditLog("WARN", "webhook_rejected", { ip: req.ip, reason: "Missing secret" });
+    return res.status(401).json({ error: "Não autorizado." });
+  }
+  try {
+    const a = Buffer.from(incomingSecret);
+    const b = Buffer.from(config.WEBHOOK_SECRET);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      throw new Error("Secret mismatch");
+    }
+  } catch {
+    auditLog("WARN", "webhook_rejected", { ip: req.ip, reason: "Invalid secret" });
+    return res.status(401).json({ error: "Não autorizado." });
+  }
+  next();
+}
+
+// ─── Autenticação do Webhook ZapSign ─────────────────────────────────────────
+// A ZapSign envia um header x-zapsign-hmac-sha256 com HMAC do body.
+// Valida antes de processar qualquer dado.
+function validateZapSignSignature(req, res, next) {
+  const signature = req.headers["x-zapsign-hmac-sha256"];
+  if (!signature) {
+    auditLog("WARN", "zapsign_webhook_rejected", { ip: req.ip, reason: "Missing signature" });
+    return res.status(401).json({ error: "Não autorizado." });
+  }
+  try {
+    const rawBody = JSON.stringify(req.body);
+    const expected = crypto
+      .createHmac("sha256", config.ZAPSIGN_WEBHOOK_SECRET)
+      .update(rawBody, "utf8")
+      .digest("hex");
+    const incomingBuf = Buffer.from(signature);
+    const expectedBuf = Buffer.from(expected);
+    if (incomingBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(incomingBuf, expectedBuf)) {
+      throw new Error("Signature mismatch");
+    }
+  } catch {
+    auditLog("WARN", "zapsign_webhook_rejected", { ip: req.ip, reason: "Invalid signature" });
     return res.status(401).json({ error: "Não autorizado." });
   }
   next();
@@ -74,12 +110,15 @@ app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, 
     auditLog("INFO", "document_created", {
       ticket_id,
       email,
-      doc_token: doc.token,
-      sign_url: doc.signers?.[0]?.sign_url,
+      // doc_token e sign_url omitidos do log — dados sensíveis ficam só no Zendesk
     });
 
+    const signUrl = doc.signers?.[0]?.sign_url;
+
+    // Só o link de assinatura vai para o ticket (destinado ao agente/cliente)
+    // O token interno da ZapSign NÃO é exposto no comentário
     await updateTicket(ticket_id, {
-      comment: `📄 Documento enviado para assinatura.\n🔗 Link: ${doc.signers?.[0]?.sign_url}\n📋 Token ZapSign: ${doc.token}`,
+      comment: `📄 Documento enviado para assinatura.\n🔗 Link: ${signUrl}`,
       tags: ["contrato_enviado"],
     });
 
@@ -102,7 +141,7 @@ app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, 
 });
 
 // ─── Rota: Webhook ZapSign (documento assinado) ───────────────────────────────
-app.post("/webhook/zapsign", async (req, res) => {
+app.post("/webhook/zapsign", validateZapSignSignature, async (req, res) => {
   const { document, event_action } = req.body;
 
   if (event_action !== "sign_doc") {
@@ -112,14 +151,16 @@ app.post("/webhook/zapsign", async (req, res) => {
   const ticket_id = document?.external_id;
   const signer_email = document?.signers?.[0]?.email;
 
-  auditLog("INFO", "document_signed", { ticket_id, signer_email, doc_token: document?.token });
+  // Token omitido do log — identificador interno da ZapSign
+  auditLog("INFO", "document_signed", { ticket_id, signer_email });
 
   res.status(200).json({ status: "ok" });
 
   try {
     if (ticket_id) {
       await updateTicket(ticket_id, {
-        comment: `✅ Documento assinado por ${signer_email}.\n📋 Token: ${document?.token}`,
+        // Token interno da ZapSign não vai para o comentário público do ticket
+        comment: `✅ Documento assinado por ${signer_email}.`,
         tags: ["contrato_assinado"],
         status: "solved",
       });

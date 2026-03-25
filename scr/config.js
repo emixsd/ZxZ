@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const REQUIRED = [
   "ZAPSIGN_API_TOKEN",
+  "ZAPSIGN_WEBHOOK_SECRET",  // secret para validar webhooks recebidos da ZapSign
   "ZENDESK_SUBDOMAIN",
   "ZENDESK_EMAIL",
   "ZENDESK_API_TOKEN",
@@ -22,6 +23,7 @@ if (missing.length > 0) {
 
 const config = {
   ZAPSIGN_API_TOKEN: process.env.ZAPSIGN_API_TOKEN,
+  ZAPSIGN_WEBHOOK_SECRET: process.env.ZAPSIGN_WEBHOOK_SECRET,
   ZENDESK_SUBDOMAIN: process.env.ZENDESK_SUBDOMAIN,
   ZENDESK_EMAIL: process.env.ZENDESK_EMAIL,
   ZENDESK_API_TOKEN: process.env.ZENDESK_API_TOKEN,

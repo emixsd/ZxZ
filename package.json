@@ -1,0 +1,17 @@
+{
+  "name": "zapsign-zendesk-middleware",
+  "version": "1.0.0",
+  "description": "Middleware para integrar ZapSign com Zendesk — cria documentos para assinatura eletrônica a partir de tickets",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": ["zapsign", "zendesk", "assinatura-eletronica", "integração", "middleware"],
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0"
+  }
+}

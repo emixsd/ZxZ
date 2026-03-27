@@ -1,5 +1,5 @@
 const axios = require('axios');
-const config = require('./config');
+const { config } = require('./config');
 
 const zapsignApi = axios.create({
   baseURL: config.zapsign.baseUrl,
@@ -117,4 +117,6 @@ module.exports = {
   criarDocumentoViaModelo,
   criarDocumentoViaUpload,
   detalharDocumento,
+  // aliases usados em index.js
+  createDocumentFromTemplate: criarDocumentoViaModelo,
 };

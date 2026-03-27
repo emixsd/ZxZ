@@ -1,5 +1,5 @@
 const axios = require('axios');
-const config = require('./config');
+const { config } = require('./config');
 
 const zendeskApi = axios.create({
   baseURL: `https://${config.zendesk.subdomain}.zendesk.com/api/v2`,
@@ -13,11 +13,12 @@ const zendeskApi = axios.create({
 /**
  * Adiciona um comentário interno ao ticket e atualiza tags.
  */
-async function atualizarTicket(ticketId, { mensagem, tags = [], camposCustom = [] }) {
+async function atualizarTicket(ticketId, { mensagem, comment, tags = [], camposCustom = [], status }) {
+  const body = mensagem || comment || '';
   const ticketUpdate = {
     ticket: {
       comment: {
-        body: mensagem,
+        body,
         public: false, // nota interna — não visível ao cliente
       },
     },
@@ -29,6 +30,10 @@ async function atualizarTicket(ticketId, { mensagem, tags = [], camposCustom = [
 
   if (camposCustom.length > 0) {
     ticketUpdate.ticket.custom_fields = camposCustom;
+  }
+
+  if (status) {
+    ticketUpdate.ticket.status = status;
   }
 
   const { data } = await zendeskApi.put(`/tickets/${ticketId}`, ticketUpdate);
@@ -92,4 +97,6 @@ module.exports = {
   registrarDocumentoEnviado,
   registrarDocumentoAssinado,
   registrarDocumentoRecusado,
+  // alias usado em index.js
+  updateTicket: atualizarTicket,
 };

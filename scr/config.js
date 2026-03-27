@@ -16,7 +16,7 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
-module.exports = {
+const config = {
   zapsign: {
     apiToken: process.env.ZAPSIGN_API_TOKEN,
     webhookSecret: process.env.ZAPSIGN_WEBHOOK_SECRET,
@@ -29,9 +29,9 @@ module.exports = {
     email: process.env.ZENDESK_EMAIL,
     apiToken: process.env.ZENDESK_API_TOKEN,
   },
-  webhookSecret: process.env.WEBHOOK_SECRET,
-  slackWebhookUrl: process.env.SLACK_WEBHOOK_URL || null,
-  port: Number(process.env.PORT || 3000),
+  WEBHOOK_SECRET: process.env.WEBHOOK_SECRET,
+  SLACK_WEBHOOK_URL: process.env.SLACK_WEBHOOK_URL || null,
+  PORT: Number(process.env.PORT || 3000),
 };
 
 module.exports = { config };

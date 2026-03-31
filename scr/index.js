@@ -136,6 +136,8 @@ app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, 
       ticket_id,
       email,
       error: err.message,
+      status: err.response?.status,
+      response: err.response?.data,
     });
 
     await sendErrorAlert({

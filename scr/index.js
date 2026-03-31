@@ -50,8 +50,14 @@ function validateWebhookSecret(req, res, next) {
 
 // ─── Autenticação do Webhook ZapSign ─────────────────────────────────────────
 // A ZapSign envia um header x-zapsign-hmac-sha256 com HMAC do body.
-// Valida antes de processar qualquer dado.
+// Se ZAPSIGN_WEBHOOK_SECRET não estiver configurado, pula a validação.
 function validateZapSignSignature(req, res, next) {
+  // Se não tem secret configurado, pula validação (útil pra contas sem HMAC)
+  if (!config.zapsign.webhookSecret) {
+    auditLog("WARN", "zapsign_hmac_skipped", { ip: req.ip, reason: "No ZAPSIGN_WEBHOOK_SECRET configured" });
+    return next();
+  }
+
   const signature = req.headers["x-zapsign-hmac-sha256"];
   if (!signature) {
     auditLog("WARN", "zapsign_webhook_rejected", { ip: req.ip, reason: "Missing signature" });
@@ -60,7 +66,7 @@ function validateZapSignSignature(req, res, next) {
   try {
     const rawBody = JSON.stringify(req.body);
     const expected = crypto
-      .createHmac("sha256", config.ZAPSIGN_WEBHOOK_SECRET)
+      .createHmac("sha256", config.zapsign.webhookSecret)
       .update(rawBody, "utf8")
       .digest("hex");
     const incomingBuf = Buffer.from(signature);

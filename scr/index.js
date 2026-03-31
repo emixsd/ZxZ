@@ -7,6 +7,7 @@ const { updateTicket } = require("./zendesk");
 const { auditLog, maskCPF, validateEmail, validateCPF, sendErrorAlert } = require("./utils");
 
 const app = express();
+app.set("trust proxy", 1); // Render usa proxy reverso
 app.use(express.json());
 
 // ─── Rate Limiting ────────────────────────────────────────────────────────────

@@ -12,16 +12,30 @@ const zapsignApi = axios.create({
 /**
  * Cria um documento na ZapSign via modelo dinâmico DOCX.
  * O modelo deve estar cadastrado na ZapSign com variáveis como {{NOME_CLIENTE}}.
+ * Aceita nomes de campos em inglês (vindos do index.js) ou português.
  */
-async function criarDocumentoViaModelo({ ticketId, nome, email, telefone, cpf, organizacao, assunto }) {
+async function criarDocumentoViaModelo(params) {
+  // Compatibilidade: aceita inglês (index.js) ou português
+  const nome = params.name || params.nome || '';
+  const email = params.email || '';
+  const telefone = params.phone || params.telefone || '';
+  const cpf = params.cpf || '';
+  const ticketId = params.ticket_id || params.ticketId || '';
+  const templateId = params.template_id || config.zapsign.templateId;
+  const organizacao = params.organizacao || '';
+  const assunto = params.assunto || '';
+
+  const phoneClean = limparTelefone(telefone);
+  const hasPhone = phoneClean.length >= 10;
+
   const payload = {
-    template_id: config.zapsign.templateId,
+    template_id: templateId,
     signer_name: nome,
     signer_email: email || '',
     signer_phone_country: '55',
-    signer_phone_number: limparTelefone(telefone),
+    signer_phone_number: phoneClean,
     send_automatic_email: !!email,
-    send_automatic_whatsapp: false,
+    send_automatic_whatsapp: hasPhone,
     external_id: `zendesk-${ticketId}`,
     folder_path: '/zendesk/',
     lang: 'pt-br',
@@ -31,13 +45,13 @@ async function criarDocumentoViaModelo({ ticketId, nome, email, telefone, cpf, o
       'Atenciosamente, Equipe de Suporte',
     ].join('\n'),
     data: [
-      { de: '{{NOME_CLIENTE}}', para: nome || '' },
-      { de: '{{CPF}}', para: cpf || '' },
-      { de: '{{EMAIL}}', para: email || '' },
+      { de: '{{NOME_CLIENTE}}', para: nome },
+      { de: '{{CPF}}', para: cpf },
+      { de: '{{EMAIL}}', para: email },
       { de: '{{NUMERO_TICKET}}', para: String(ticketId) },
       { de: '{{DATA}}', para: new Date().toLocaleDateString('pt-BR') },
-      { de: '{{ORGANIZACAO}}', para: organizacao || '' },
-      { de: '{{ASSUNTO}}', para: assunto || '' },
+      { de: '{{ORGANIZACAO}}', para: organizacao },
+      { de: '{{ASSUNTO}}', para: assunto },
     ],
   };
 

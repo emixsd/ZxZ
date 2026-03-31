@@ -84,7 +84,7 @@ function validateZapSignSignature(req, res, next) {
 
 // ─── Rota principal: Zendesk → ZapSign ───────────────────────────────────────
 app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, res) => {
-  const { ticket_id, name, email, cpf, template_id } = req.body;
+  const { ticket_id, name, email, cpf, phone, template_id } = req.body;
 
   // 1. Validação de entrada
   const errors = [];
@@ -112,7 +112,7 @@ app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, 
 
   // 3. Processamento assíncrono
   try {
-    const doc = await createDocumentFromTemplate({ template_id, name, email, cpf, ticket_id });
+    const doc = await createDocumentFromTemplate({ template_id, name, email, cpf, phone, ticket_id });
 
     auditLog("INFO", "document_created", {
       ticket_id,

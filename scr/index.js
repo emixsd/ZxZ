@@ -1,35 +1,44 @@
 const express = require("express");
-const crypto = require("crypto"); // usado em validateWebhookSecret e validateZapSignSignature
+const crypto = require("crypto");
 const rateLimit = require("express-rate-limit");
 const { config } = require("./config");
-const { createDocumentFromTemplate } = require("./zapsign");
+const { createDocument } = require("./zapsign");
 const { updateTicket } = require("./zendesk");
 const { auditLog, maskCPF, validateEmail, validateCPF, sendErrorAlert } = require("./utils");
 
 const app = express();
 app.set("trust proxy", 1); // Render usa proxy reverso
-app.use(express.json());
+
+// ─── Raw body para validação HMAC ────────────────────────────────────────────
+// Captura o body bruto antes do JSON.parse — necessário para validar
+// HMAC corretamente (JSON.stringify pode reordenar/alterar o corpo)
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    req.rawBody = buf;
+  },
+}));
 
 // ─── Rate Limiting ────────────────────────────────────────────────────────────
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 50,                   // máximo 50 requisições por IP
+  windowMs: 15 * 60 * 1000,
+  max: 50,
   message: { error: "Muitas requisições. Tente novamente em 15 minutos." },
   standardHeaders: true,
   legacyHeaders: false,
 });
 app.use(limiter);
 
-// Rate limit mais restrito para o webhook do Zendesk
 const webhookLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minuto
+  windowMs: 1 * 60 * 1000,
   max: 20,
   message: { error: "Rate limit excedido no webhook." },
 });
 
+// ─── Proteção contra duplicatas ──────────────────────────────────────────────
+// Evita criar 2+ documentos se o Zendesk disparar o trigger múltiplas vezes
+const processando = new Set();
+
 // ─── Validação do Webhook Secret (Zendesk) ───────────────────────────────────
-// Usa timingSafeEqual para evitar timing attacks (comparação de string comum
-// pode vazar o tamanho do secret por diferença de tempo de resposta)
 function validateWebhookSecret(req, res, next) {
   const incomingSecret = req.headers["x-webhook-secret"];
   if (!incomingSecret) {
@@ -49,13 +58,11 @@ function validateWebhookSecret(req, res, next) {
   next();
 }
 
-// ─── Autenticação do Webhook ZapSign ─────────────────────────────────────────
-// A ZapSign envia um header x-zapsign-hmac-sha256 com HMAC do body.
-// Se ZAPSIGN_WEBHOOK_SECRET não estiver configurado, pula a validação.
+// ─── Autenticação do Webhook ZapSign (HMAC SHA-256) ──────────────────────────
+// Usa raw body para calcular o HMAC — mais seguro que JSON.stringify
 function validateZapSignSignature(req, res, next) {
-  // Se não tem secret configurado, pula validação (útil pra contas sem HMAC)
   if (!config.zapsign.webhookSecret) {
-    auditLog("WARN", "zapsign_hmac_skipped", { ip: req.ip, reason: "No ZAPSIGN_WEBHOOK_SECRET configured" });
+    auditLog("INFO", "zapsign_hmac_skipped", { ip: req.ip });
     return next();
   }
 
@@ -65,10 +72,9 @@ function validateZapSignSignature(req, res, next) {
     return res.status(401).json({ error: "Não autorizado." });
   }
   try {
-    const rawBody = JSON.stringify(req.body);
     const expected = crypto
       .createHmac("sha256", config.zapsign.webhookSecret)
-      .update(rawBody, "utf8")
+      .update(req.rawBody)
       .digest("hex");
     const incomingBuf = Buffer.from(signature);
     const expectedBuf = Buffer.from(expected);
@@ -86,7 +92,14 @@ function validateZapSignSignature(req, res, next) {
 app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, res) => {
   const { ticket_id, name, email, cpf, phone, template_id } = req.body;
 
-  // 1. Validação de entrada
+  // 1. Proteção contra duplicatas
+  if (processando.has(ticket_id)) {
+    auditLog("INFO", "duplicate_ignored", { ticket_id });
+    return res.status(200).json({ status: "already_processing", ticket_id });
+  }
+  processando.add(ticket_id);
+
+  // 2. Validação de entrada
   const errors = [];
   if (!ticket_id) errors.push("ticket_id é obrigatório");
   if (!name || name.trim().length < 2) errors.push("name inválido");
@@ -95,35 +108,30 @@ app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, 
   if (!template_id) errors.push("template_id é obrigatório");
 
   if (errors.length > 0) {
+    processando.delete(ticket_id);
     auditLog("WARN", "validation_failed", { ticket_id, email, errors });
     return res.status(400).json({ error: "Dados inválidos", details: errors });
   }
 
-  // 2. Log de auditoria (SEM CPF)
+  // 3. Log de auditoria (CPF mascarado)
   auditLog("INFO", "request_received", {
     ticket_id,
     email,
-    name,
-    cpf: maskCPF(cpf), // ex: ***.***.789-09
+    name: name.trim(),
+    cpf: maskCPF(cpf),
   });
 
   // Responde imediatamente ao Zendesk (evita timeout de 5s)
   res.status(200).json({ status: "processing", ticket_id });
 
-  // 3. Processamento assíncrono
+  // 4. Processamento assíncrono
   try {
-    const doc = await createDocumentFromTemplate({ template_id, name, email, cpf, phone, ticket_id });
+    const doc = await createDocument({ template_id, name, email, cpf, phone, ticket_id });
 
-    auditLog("INFO", "document_created", {
-      ticket_id,
-      email,
-      // doc_token e sign_url omitidos do log — dados sensíveis ficam só no Zendesk
-    });
+    auditLog("INFO", "document_created", { ticket_id, email });
 
     const signUrl = doc.signers?.[0]?.sign_url;
 
-    // Só o link de assinatura vai para o ticket (destinado ao agente/cliente)
-    // O token interno da ZapSign NÃO é exposto no comentário
     await updateTicket(ticket_id, {
       comment: `📄 Documento enviado para assinatura.\n🔗 Link: ${signUrl}`,
       tags: ["contrato_enviado"],
@@ -146,77 +154,106 @@ app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, 
       email,
       error: err.message,
     });
+  } finally {
+    processando.delete(ticket_id);
   }
 });
 
-// ─── Rota: Webhook ZapSign (documento assinado) ───────────────────────────────
+// ─── Rota: Webhook ZapSign ───────────────────────────────────────────────────
 app.post("/webhook/zapsign", validateZapSignSignature, async (req, res) => {
-  // Log do payload completo pra debug
-  auditLog("INFO", "zapsign_webhook_received", {
-    event_type: req.body.event_type || req.body.event_action || "unknown",
-    status: req.body.status || req.body.document?.status || "unknown",
-    external_id: req.body.external_id || req.body.document?.external_id || "none",
-  });
-
-  // ZapSign pode enviar o evento como event_type ou event_action
   const eventType = req.body.event_type || req.body.event_action || "";
   const doc = req.body.document || req.body;
 
-  // Aceitar variações do evento de assinatura
-  const isSignEvent = ["sign_doc", "doc_signed", "signed"].includes(eventType)
-    || doc.status === "signed";
-
-  if (!isSignEvent) {
-    auditLog("INFO", "zapsign_webhook_ignored", { event: eventType });
-    return res.status(200).json({ status: "ignored" });
-  }
+  auditLog("INFO", "zapsign_webhook_received", {
+    event_type: eventType,
+    status: doc.status || "unknown",
+    external_id: doc.external_id || "none",
+  });
 
   // Extrair ticket_id do external_id (formato: "zendesk-12345")
   const externalId = doc.external_id || "";
   const ticket_id = externalId.startsWith("zendesk-")
     ? externalId.replace("zendesk-", "")
     : externalId;
-  const signer_email = doc.signers?.[0]?.email || "";
 
-  auditLog("INFO", "document_signed", { ticket_id, signer_email });
+  // ── Documento assinado ──
+  // Verifica doc.status === "signed" para garantir que TODOS os signatários
+  // assinaram (não apenas 1 de N). Isso protege cenários com múltiplos signatários.
+  const isFullySigned = ["doc_signed", "sign_doc", "signed"].includes(eventType)
+    && doc.status === "signed";
 
-  res.status(200).json({ status: "ok" });
+  if (isFullySigned && ticket_id) {
+    const signer_email = doc.signers?.[0]?.email || "";
+    auditLog("INFO", "document_signed", { ticket_id, signer_email });
+    res.status(200).json({ status: "ok" });
 
-  try {
-    if (ticket_id) {
+    try {
       await updateTicket(ticket_id, {
         comment: `✅ Documento assinado por ${signer_email}.`,
         tags: ["contrato_assinado"],
-        // Não muda status automaticamente — o agente decide quando resolver
       });
-
       auditLog("INFO", "ticket_updated_signed", { ticket_id, signer_email });
+    } catch (err) {
+      auditLog("ERROR", "zapsign_webhook_failed", {
+        ticket_id,
+        error: err.message,
+        status: err.response?.status,
+        response: err.response?.data,
+      });
+      await sendErrorAlert({
+        title: "❌ Falha ao processar assinatura",
+        ticket_id,
+        email: signer_email,
+        error: err.message,
+      });
     }
-  } catch (err) {
-    auditLog("ERROR", "zapsign_webhook_failed", {
-      ticket_id,
-      error: err.message,
-      status: err.response?.status,
-      response: err.response?.data,
-    });
-
-    await sendErrorAlert({
-      title: "❌ Falha ao processar assinatura",
-      ticket_id,
-      email: signer_email,
-      error: err.message,
-    });
+    return;
   }
+
+  // ── Documento recusado ──
+  const isRefused = ["doc_refused", "refused"].includes(eventType)
+    || doc.status === "refused";
+
+  if (isRefused && ticket_id) {
+    const signer_email = doc.signers?.[0]?.email || "";
+    const motivo = doc.refusal_reason || req.body.refusal_reason || "";
+    auditLog("INFO", "document_refused", { ticket_id, signer_email, motivo });
+    res.status(200).json({ status: "ok" });
+
+    try {
+      await updateTicket(ticket_id, {
+        comment: `❌ Documento recusado por ${signer_email}.${motivo ? `\n📝 Motivo: ${motivo}` : ""}`,
+        tags: ["contrato_recusado"],
+      });
+      auditLog("INFO", "ticket_updated_refused", { ticket_id, signer_email });
+    } catch (err) {
+      auditLog("ERROR", "zapsign_webhook_refused_failed", {
+        ticket_id,
+        error: err.message,
+        status: err.response?.status,
+        response: err.response?.data,
+      });
+    }
+    return;
+  }
+
+  // ── Outros eventos (ignorados) ──
+  auditLog("INFO", "zapsign_webhook_ignored", { event: eventType, status: doc.status });
+  res.status(200).json({ status: "ignored" });
 });
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    version: "1.2.0",
+  });
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = config.PORT || 3000;
 app.listen(PORT, () => {
-  auditLog("INFO", "server_started", { port: PORT });
+  auditLog("INFO", "server_started", { port: PORT, version: "1.2.0" });
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });

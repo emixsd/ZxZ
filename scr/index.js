@@ -151,16 +151,33 @@ app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, 
 
 // ─── Rota: Webhook ZapSign (documento assinado) ───────────────────────────────
 app.post("/webhook/zapsign", validateZapSignSignature, async (req, res) => {
-  const { document, event_action } = req.body;
+  // Log do payload completo pra debug
+  auditLog("INFO", "zapsign_webhook_received", {
+    event_type: req.body.event_type || req.body.event_action || "unknown",
+    status: req.body.status || req.body.document?.status || "unknown",
+    external_id: req.body.external_id || req.body.document?.external_id || "none",
+  });
 
-  if (event_action !== "sign_doc") {
+  // ZapSign pode enviar o evento como event_type ou event_action
+  const eventType = req.body.event_type || req.body.event_action || "";
+  const doc = req.body.document || req.body;
+
+  // Aceitar variações do evento de assinatura
+  const isSignEvent = ["sign_doc", "doc_signed", "signed"].includes(eventType)
+    || doc.status === "signed";
+
+  if (!isSignEvent) {
+    auditLog("INFO", "zapsign_webhook_ignored", { event: eventType });
     return res.status(200).json({ status: "ignored" });
   }
 
-  const ticket_id = document?.external_id;
-  const signer_email = document?.signers?.[0]?.email;
+  // Extrair ticket_id do external_id (formato: "zendesk-12345")
+  const externalId = doc.external_id || "";
+  const ticket_id = externalId.startsWith("zendesk-")
+    ? externalId.replace("zendesk-", "")
+    : externalId;
+  const signer_email = doc.signers?.[0]?.email || "";
 
-  // Token omitido do log — identificador interno da ZapSign
   auditLog("INFO", "document_signed", { ticket_id, signer_email });
 
   res.status(200).json({ status: "ok" });

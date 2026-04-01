@@ -1,6 +1,6 @@
 # ZxZ — Middleware Zendesk ↔ ZapSign
 
-Middleware Node.js que conecta o **Zendesk** à **ZapSign**, criando documentos para assinatura eletrônica a partir de tickets de reembolso.
+Middleware Node.js que conecta o **Zendesk** à **ZapSign**, criando documentos para assinatura eletrônica a partir de tickets.
 
 ```
 Ticket Zendesk ──► Webhook ──► Middleware ──► API ZapSign ──► Documento criado
@@ -10,23 +10,28 @@ Ticket atualizado ◄── Middleware ◄── Webhook ZapSign ◄── Assin
 
 **O que acontece na prática:**
 
-1. Ticket de reembolso criado no Zendesk
+1. Ticket criado no Zendesk com a tag `enviar_contrato`
 2. Zendesk dispara um webhook com os dados do ticket
-3. Este middleware recebe os dados, valida, e chama a API da ZapSign
-4. A ZapSign cria o documento e envia o link de assinatura ao cliente por e-mail ou WhatsApp
-5. Quando o cliente assina, a ZapSign notifica este middleware via webhook
-6. O middleware atualiza o ticket no Zendesk com o status da assinatura e resolve o ticket
+3. Middleware recebe os dados, valida, e chama a API da ZapSign
+4. ZapSign cria o documento e envia o link por e-mail e WhatsApp
+5. Middleware adiciona nota interna no ticket com o link de assinatura
+6. Quando o cliente assina, a ZapSign notifica o middleware via webhook
+7. Middleware adiciona nota interna e tag `contrato_assinado` no ticket
+8. Se o cliente recusar, adiciona nota e tag `contrato_recusado`
 
 ---
 
 ## Funcionalidades
 
-- **Rate limiting** — proteção contra abuso (50 req/15min global, 20 req/min no webhook)
-- **Autenticação segura** — validação de webhook secret (Zendesk) e HMAC SHA-256 (ZapSign) com `timingSafeEqual`
-- **Audit logs** — logs estruturados em JSON com mascaramento de CPF
-- **Validação de dados** — CPF (com dígitos verificadores), e-mail e campos obrigatórios
+- **Envio por e-mail e WhatsApp** — automático quando o telefone está preenchido
+- **Rate limiting** — 50 req/15min global, 20 req/min no webhook
+- **Autenticação segura** — webhook secret (Zendesk) e HMAC SHA-256 com raw body (ZapSign)
+- **Proteção contra duplicatas** — evita criar múltiplos documentos se o trigger disparar repetido
+- **Audit logs** — logs estruturados em JSON com CPF mascarado
+- **Validação de dados** — CPF com dígitos verificadores, e-mail, campos obrigatórios
 - **Alertas via Slack** — notificação automática em caso de falhas
-- **Resposta assíncrona** — retorna 200 imediatamente ao Zendesk e processa em background
+- **Suporte a múltiplos signatários** — só marca como assinado quando todos assinaram
+- **Documento recusado** — detecta recusa e adiciona tag + nota no ticket
 
 ---
 
@@ -35,7 +40,7 @@ Ticket atualizado ◄── Middleware ◄── Webhook ZapSign ◄── Assin
 - **Node.js** v18+
 - **Conta ZapSign** com plano de API ([sandbox para testes](https://sandbox.app.zapsign.com.br/acesso/entrar))
 - **Conta Zendesk** com acesso administrativo
-- Servidor com HTTPS (para receber webhooks)
+- Servidor com HTTPS (ex: Render, Railway)
 
 ---
 
@@ -45,150 +50,91 @@ Ticket atualizado ◄── Middleware ◄── Webhook ZapSign ◄── Assin
 git clone https://github.com/emixsd/ZxZ.git
 cd ZxZ
 npm install
-cp .env.example .env
-```
-
-Edite o `.env` com suas credenciais (veja a seção [Variáveis de Ambiente](#variáveis-de-ambiente)).
-
-```bash
-# Desenvolvimento (com hot-reload)
+cp .env.example .env    # edite com seus tokens reais
 npm run dev
-
-# Produção
-npm start
 ```
+
+---
+
+## Deploy no Render
+
+1. Acesse https://render.com → **New → Web Service**
+2. Conecte o repo `emixsd/ZxZ`
+3. Configure: Build `npm install`, Start `node scr/index.js`, Plan **Free**
+4. Adicione as variáveis de ambiente (veja abaixo)
+5. Deploy
 
 ---
 
 ## Configuração
 
-### 1. Zendesk — Criar Webhook
+### Zendesk — Webhook
 
 **Admin Center → Apps and Integrations → Webhooks → Create Webhook**
 
 | Campo | Valor |
 |-------|-------|
-| Endpoint URL | `https://seu-servidor.com/webhook/zendesk` |
+| Endpoint URL | `https://SEU-APP.onrender.com/webhook/zendesk` |
 | Method | POST |
-| Content-Type | application/json |
+| Format | JSON |
 
-Adicione o header customizado:
-```
-x-webhook-secret: {valor do WEBHOOK_SECRET no .env}
-```
+Adicione o cabeçalho: `x-webhook-secret` → mesmo valor do `WEBHOOK_SECRET` no Render.
 
-### 2. Zendesk — Criar Trigger
+### Zendesk — Trigger
 
 **Admin Center → Objects and rules → Triggers → Add Trigger**
 
-**Condições:**
-- Tag contém `enviar_contrato` (ou a condição desejada)
+**Condições (Meet ALL):**
+- Tag contém `enviar_contrato`
+- Tag **não contém** `contrato_enviado`
 
-**Ações:**
-- Notificar webhook → selecionar o webhook criado
+**Ações:** Notificar webhook → selecionar o webhook criado
 
-**Body JSON do trigger:**
-
+**Body JSON:**
 ```json
 {
   "ticket_id": "{{ticket.id}}",
   "name": "{{ticket.requester.name}}",
   "email": "{{ticket.requester.email}}",
   "cpf": "{{ticket.ticket_field_XXXXX}}",
-  "template_id": "TOKEN_DO_MODELO_ZAPSIGN"
+  "phone": "{{ticket.ticket_field_YYYYY}}",
+  "template_id": "TOKEN_DO_MODELO"
 }
 ```
 
-> Substitua `XXXXX` pelo ID do campo customizado de CPF no seu Zendesk.
-> Substitua `TOKEN_DO_MODELO_ZAPSIGN` pelo token do modelo cadastrado na ZapSign.
+### ZapSign — Webhook
 
-### 3. ZapSign — Configurar Webhook de Retorno
+**Configurações → Integração → Webhooks**
 
-**Configurações → Integração → Webhooks** e adicione:
-
-```
-URL: https://seu-servidor.com/webhook/zapsign
-```
+| Campo | Valor |
+|-------|-------|
+| Tipo de evento | Documento assinado |
+| URL | `https://SEU-APP.onrender.com/webhook/zapsign` |
 
 ---
 
 ## Endpoints
 
-### `POST /webhook/zendesk`
-
-Recebe o evento do Zendesk, valida os dados e cria o documento na ZapSign.
-
-**Headers obrigatórios:**
-```
-x-webhook-secret: {WEBHOOK_SECRET}
-Content-Type: application/json
-```
-
-**Body:**
-```json
-{
-  "ticket_id": "12345",
-  "name": "João da Silva",
-  "email": "joao@email.com",
-  "cpf": "12345678909",
-  "template_id": "abc123-def456"
-}
-```
-
-**Resposta (200):**
-```json
-{
-  "status": "processing",
-  "ticket_id": "12345"
-}
-```
-
-**Validações aplicadas:**
-- `ticket_id` — obrigatório
-- `name` — obrigatório, mínimo 2 caracteres
-- `email` — formato válido
-- `cpf` — validado com algoritmo de dígitos verificadores
-- `template_id` — obrigatório
-
-Após o retorno, o middleware processa em background: cria o documento na ZapSign e adiciona uma nota interna no ticket com o link de assinatura.
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| POST | `/webhook/zendesk` | Recebe evento do Zendesk → cria documento na ZapSign |
+| POST | `/webhook/zapsign` | Recebe evento da ZapSign → atualiza ticket no Zendesk |
+| GET | `/health` | Health check |
 
 ---
 
-### `POST /webhook/zapsign`
-
-Recebe notificações da ZapSign quando um documento é assinado.
-
-**Headers obrigatórios:**
-```
-x-zapsign-hmac-sha256: {assinatura HMAC do body}
-```
-
-**Eventos tratados:**
-- `sign_doc` → atualiza o ticket no Zendesk com "✅ Documento assinado", adiciona tag `contrato_assinado` e resolve o ticket automaticamente
-
----
-
-### `GET /health`
-
-Health check do servidor.
-
-```json
-{ "status": "ok", "timestamp": "2026-03-27T12:00:00.000Z" }
-```
-
----
-
-## Estrutura do Projeto
+## Estrutura
 
 ```
 ZxZ/
 ├── scr/
-│   ├── index.js       # Servidor Express, rotas e middlewares de segurança
-│   ├── config.js      # Carrega e valida variáveis de ambiente
-│   ├── zapsign.js     # Integração com a API da ZapSign (modelo dinâmico + upload PDF)
-│   ├── zendesk.js     # Integração com a API do Zendesk (notas internas, tags, status)
-│   └── utils.js       # Audit log, validação de CPF/email, mascaramento, alerta Slack
+│   ├── index.js       # Servidor, rotas, segurança, dedup
+│   ├── config.js      # Variáveis de ambiente
+│   ├── zapsign.js     # API ZapSign (modelo + upload PDF)
+│   ├── zendesk.js     # API Zendesk (notas internas, tags)
+│   └── utils.js       # Log, validação CPF/email, Slack
 ├── .env.example
+├── .gitignore
 ├── package.json
 └── README.md
 ```
@@ -199,53 +145,37 @@ ZxZ/
 
 | Variável | Obrigatória | Descrição |
 |----------|:-----------:|-----------|
-| `ZAPSIGN_API_TOKEN` | ✅ | Token de API da ZapSign (Configurações → Integração) |
-| `ZAPSIGN_WEBHOOK_SECRET` | ✅ | Secret para validar HMAC dos webhooks da ZapSign |
-| `ZAPSIGN_BASE_URL` | ❌ | URL base da API. Default: `https://api.zapsign.com.br/api/v1` |
-| `ZAPSIGN_TEMPLATE_ID` | ❌ | Token do modelo DOCX padrão (usado se não vier no body) |
-| `ZAPSIGN_PDF_URL` | ❌ | URL pública do PDF (fallback se não usar modelo) |
-| `ZENDESK_SUBDOMAIN` | ✅ | Subdomínio (ex: `minhaempresa` → minhaempresa.zendesk.com) |
+| `ZAPSIGN_API_TOKEN` | ✅ | Token de API da ZapSign |
+| `ZAPSIGN_BASE_URL` | ❌ | Default: `https://api.zapsign.com.br/api/v1`. Use `https://sandbox.api.zapsign.com.br/api/v1` para testes |
+| `ZAPSIGN_TEMPLATE_ID` | ❌ | Token do modelo DOCX (fallback se não vier no body) |
+| `ZAPSIGN_PDF_URL` | ❌ | URL do PDF (fallback se não usar modelo) |
+| `ZAPSIGN_WEBHOOK_SECRET` | ❌ | Secret HMAC da ZapSign (quando disponível) |
+| `ZENDESK_SUBDOMAIN` | ✅ | Subdomínio do Zendesk |
 | `ZENDESK_EMAIL` | ✅ | E-mail do agente com permissão de API |
 | `ZENDESK_API_TOKEN` | ✅ | Token de API do Zendesk |
-| `WEBHOOK_SECRET` | ✅ | Secret para validar webhooks recebidos do Zendesk |
-| `SLACK_WEBHOOK_URL` | ❌ | URL do webhook Slack para alertas de erro |
-| `PORT` | ❌ | Porta do servidor. Default: `3000` |
+| `WEBHOOK_SECRET` | ✅ | Secret para validar webhooks do Zendesk |
+| `SLACK_WEBHOOK_URL` | ❌ | Webhook Slack para alertas de erro |
+| `PORT` | ❌ | Default: `3000` |
 
----
-
-## Ambiente de Testes
-
-Use o **sandbox da ZapSign** para testar sem custos:
-
-```env
-ZAPSIGN_BASE_URL=https://sandbox.api.zapsign.com.br/api/v1
-```
-
-Para expor o servidor local e receber webhooks durante desenvolvimento:
-
-```bash
-npx ngrok http 3000
-```
+> **Atenção:** o `ZAPSIGN_BASE_URL` default é produção. Para testes, defina explicitamente a URL do sandbox.
 
 ---
 
 ## Segurança
 
-- **Webhook Zendesk** — validação via `x-webhook-secret` com `crypto.timingSafeEqual` (previne timing attacks)
-- **Webhook ZapSign** — validação via `x-zapsign-hmac-sha256` com HMAC SHA-256
-- **CPF mascarado** em todos os logs (`***.***. 789-09`)
-- **Token do documento** não é exposto nos comentários do ticket
-- **Rate limiting** por IP em todas as rotas
+- **Zendesk** — `x-webhook-secret` com `timingSafeEqual`
+- **ZapSign** — HMAC SHA-256 com raw body (quando secret configurado)
+- **CPF mascarado** em todos os logs
+- **Rate limiting** por IP
+- **Proteção contra duplicatas** em memória
 
 ---
 
-## Links Úteis
+## Links
 
 - [Documentação API ZapSign](https://docs.zapsign.com.br/)
 - [Sandbox ZapSign](https://sandbox.app.zapsign.com.br/)
-- [Postman Collection ZapSign](https://www.postman.com/zapsign/zapsign-workspace/)
-- [Zendesk API Reference](https://developer.zendesk.com/api-reference/)
-- [Zendesk Webhooks](https://developer.zendesk.com/documentation/webhooks/)
+- [Zendesk API](https://developer.zendesk.com/api-reference/)
 
 ---
 

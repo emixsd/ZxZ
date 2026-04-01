@@ -39,11 +39,9 @@ async function criarDocumentoViaModelo(params) {
     external_id: `zendesk-${ticketId}`,
     folder_path: '/zendesk/',
     lang: 'pt-br',
-    custom_message: [
-      `Olá ${nome},`,
-      `Segue o documento referente ao chamado #${ticketId} para sua assinatura.`,
-      'Atenciosamente, Equipe de Suporte',
-    ].join('\n'),
+    custom_message: hasPhone
+      ? `Olá ${nome}, segue o documento referente ao chamado #${ticketId} para sua assinatura. Atenciosamente, Equipe de Suporte`
+      : `Olá ${nome},\nSegue o documento referente ao chamado #${ticketId} para sua assinatura.\nAtenciosamente, Equipe de Suporte`,
     data: [
       { de: '{{NOME_CLIENTE}}', para: nome },
       { de: '{{CPF}}', para: cpf },

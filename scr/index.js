@@ -185,16 +185,20 @@ app.post("/webhook/zapsign", validateZapSignSignature, async (req, res) => {
   try {
     if (ticket_id) {
       await updateTicket(ticket_id, {
-        // Token interno da ZapSign não vai para o comentário público do ticket
         comment: `✅ Documento assinado por ${signer_email}.`,
         tags: ["contrato_assinado"],
-        status: "solved",
+        // Não muda status automaticamente — o agente decide quando resolver
       });
 
-      auditLog("INFO", "ticket_solved", { ticket_id, signer_email });
+      auditLog("INFO", "ticket_updated_signed", { ticket_id, signer_email });
     }
   } catch (err) {
-    auditLog("ERROR", "zapsign_webhook_failed", { ticket_id, error: err.message });
+    auditLog("ERROR", "zapsign_webhook_failed", {
+      ticket_id,
+      error: err.message,
+      status: err.response?.status,
+      response: err.response?.data,
+    });
 
     await sendErrorAlert({
       title: "❌ Falha ao processar assinatura",

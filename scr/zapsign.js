@@ -3,6 +3,7 @@ const { config } = require('./config');
 
 const zapsignApi = axios.create({
   baseURL: config.zapsign.baseUrl,
+  timeout: 30000, // 30 segundos
   headers: {
     'Authorization': `Bearer ${config.zapsign.apiToken}`,
     'Content-Type': 'application/json',
@@ -11,12 +12,10 @@ const zapsignApi = axios.create({
 
 /**
  * Cria um documento na ZapSign via modelo dinâmico DOCX.
- * O modelo deve estar cadastrado na ZapSign com variáveis como {{NOME_CLIENTE}}.
  * Aceita nomes de campos em inglês (vindos do index.js) ou português.
  */
 async function criarDocumentoViaModelo(params) {
-  // Compatibilidade: aceita inglês (index.js) ou português
-  const nome = params.name || params.nome || '';
+  const nome = (params.name || params.nome || '').trim();
   const email = params.email || '';
   const telefone = params.phone || params.telefone || '';
   const cpf = params.cpf || '';
@@ -60,7 +59,17 @@ async function criarDocumentoViaModelo(params) {
 /**
  * Cria um documento na ZapSign via upload de PDF (URL pública ou base64).
  */
-async function criarDocumentoViaUpload({ ticketId, nome, email, telefone, cpf, assunto }) {
+async function criarDocumentoViaUpload(params) {
+  const nome = (params.name || params.nome || '').trim();
+  const email = params.email || '';
+  const telefone = params.phone || params.telefone || '';
+  const cpf = params.cpf || '';
+  const ticketId = params.ticket_id || params.ticketId || '';
+  const assunto = params.assunto || '';
+
+  const phoneClean = limparTelefone(telefone);
+  const hasPhone = phoneClean.length >= 10;
+
   const payload = {
     name: `Contrato - Ticket #${ticketId} - ${assunto || 'Documento'}`,
     url_pdf: config.zapsign.pdfUrl,
@@ -73,14 +82,17 @@ async function criarDocumentoViaUpload({ ticketId, nome, email, telefone, cpf, a
         name: nome,
         email: email || '',
         phone_country: '55',
-        phone_number: limparTelefone(telefone),
+        phone_number: phoneClean,
         auth_mode: 'assinaturaTela',
         send_automatic_email: !!email,
+        send_automatic_whatsapp: hasPhone,
         lock_name: true,
         lock_email: true,
         require_cpf: !!cpf,
         cpf: cpf || '',
-        custom_message: `Olá ${nome}, segue o documento do chamado #${ticketId} para assinatura.`,
+        custom_message: hasPhone
+          ? `Olá ${nome}, segue o documento do chamado #${ticketId} para assinatura.`
+          : `Olá ${nome},\nSegue o documento do chamado #${ticketId} para assinatura.`,
       },
     ],
   };
@@ -93,13 +105,11 @@ async function criarDocumentoViaUpload({ ticketId, nome, email, telefone, cpf, a
  * Função principal — decide entre modelo ou upload conforme configuração.
  */
 async function criarDocumento(dadosTicket) {
-  if (config.zapsign.templateId) {
-    console.log(`📄 Criando documento via modelo (template: ${config.zapsign.templateId})`);
+  if (dadosTicket.template_id || config.zapsign.templateId) {
     return criarDocumentoViaModelo(dadosTicket);
   }
 
   if (config.zapsign.pdfUrl) {
-    console.log(`📄 Criando documento via upload de PDF`);
     return criarDocumentoViaUpload(dadosTicket);
   }
 
@@ -129,6 +139,6 @@ module.exports = {
   criarDocumentoViaModelo,
   criarDocumentoViaUpload,
   detalharDocumento,
-  // aliases usados em index.js
-  createDocumentFromTemplate: criarDocumentoViaModelo,
+  // alias usado em index.js — aponta pra função principal (com fallback PDF)
+  createDocument: criarDocumento,
 };

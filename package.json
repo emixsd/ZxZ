@@ -1,6 +1,6 @@
 {
   "name": "zxz-middleware",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Middleware de integração Zendesk → ZapSign",
   "main": "scr/index.js",
   "scripts": {

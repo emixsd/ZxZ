@@ -134,10 +134,10 @@ app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, 
 
     await updateTicket(ticket_id, {
       comment: `📄 Documento enviado para assinatura.\n🔗 Link: ${signUrl}`,
-      tags: ["contrato_enviado"],
+      tagsAdicionar: ["documento_enviado"],
     });
 
-    auditLog("INFO", "ticket_updated", { ticket_id, status: "contrato_enviado" });
+    auditLog("INFO", "ticket_updated", { ticket_id, status: "documento_enviado" });
 
   } catch (err) {
     auditLog("ERROR", "processing_failed", {
@@ -190,7 +190,8 @@ app.post("/webhook/zapsign", validateZapSignSignature, async (req, res) => {
     try {
       await updateTicket(ticket_id, {
         comment: `✅ Documento assinado por ${signer_email}.`,
-        tags: ["contrato_assinado"],
+        tagsAdicionar: ["documento_assinado"],
+        tagsRemover: ["documento_enviado"],
       });
       auditLog("INFO", "ticket_updated_signed", { ticket_id, signer_email });
     } catch (err) {
@@ -223,7 +224,8 @@ app.post("/webhook/zapsign", validateZapSignSignature, async (req, res) => {
     try {
       await updateTicket(ticket_id, {
         comment: `❌ Documento recusado por ${signer_email}.${motivo ? `\n📝 Motivo: ${motivo}` : ""}`,
-        tags: ["contrato_recusado"],
+        tagsAdicionar: ["documento_recusado"],
+        tagsRemover: ["documento_enviado"],
       });
       auditLog("INFO", "ticket_updated_refused", { ticket_id, signer_email });
     } catch (err) {

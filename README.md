@@ -41,8 +41,4 @@ Ticket atualizado ◄── Middleware ◄── Webhook ZapSign ◄── Assin
 - [Sandbox ZapSign](https://sandbox.app.zapsign.com.br/)
 - [Zendesk API](https://developer.zendesk.com/api-reference/)
 
----
 
-## Licença
-
-MIT

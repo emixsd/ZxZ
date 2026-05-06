@@ -45,7 +45,7 @@ async function criarDocumentoViaModelo(params) {
       ? `Olá ${nome}, segue o documento referente ao chamado #${ticketId} para sua assinatura. Atenciosamente, Equipe de Suporte`
       : `Olá ${nome},\nSegue o documento referente ao chamado #${ticketId} para sua assinatura.\nAtenciosamente, Equipe de Suporte`,
     data: criarCamposModelo([
-      { variaveis: ['NOME_CLIENTE', 'NOME COMPLETO', 'NOME', 'NOME DO CLIENTE', 'CLIENTE'], valor: nome },
+      { variaveis: ['NOME COMPLETO', 'NAME', 'CLIENTE'], valor: nome },
       { variaveis: ['CPF', 'NUMERO DO CPF', 'NÚMERO DO CPF'], valor: cpf },
       { variaveis: ['EMAIL', 'E-MAIL', 'EMAIL DO CLIENTE'], valor: email },
       { variaveis: ['NUMERO_TICKET', 'NUMERO DO TICKET', 'NÚMERO DO TICKET', 'TICKET'], valor: String(ticketId) },

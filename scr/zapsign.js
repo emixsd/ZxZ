@@ -20,7 +20,10 @@ async function criarDocumentoViaModelo(params) {
   const telefone = params.phone || params.telefone || '';
   const cpf = params.cpf || '';
   const ticketId = params.ticket_id || params.ticketId || '';
-  const templateId = params.template_id || config.zapsign.templateId;
+  // Prefer the Render/env template so production is not affected by an old
+  // sandbox template_id still being sent by Zendesk.
+  const templateSource = config.zapsign.templateId ? 'env' : 'request';
+  const templateId = config.zapsign.templateId || params.template_id;
   const organizacao = params.organizacao || '';
   const assunto = params.assunto || '';
 
@@ -52,8 +55,21 @@ async function criarDocumentoViaModelo(params) {
     ],
   };
 
-  const { data } = await zapsignApi.post('/models/create-doc/', payload);
-  return data;
+  try {
+    const { data } = await zapsignApi.post('/models/create-doc/', payload);
+    return data;
+  } catch (err) {
+    if (
+      err.response?.status === 404
+      && String(err.response?.data?.detail || '').includes('No Template')
+    ) {
+      const hint = templateSource === 'env'
+        ? 'Verifique se ZAPSIGN_TEMPLATE_ID no Render e o token do modelo da conta de producao.'
+        : 'Verifique se o template_id enviado pelo Zendesk e o token do modelo da conta de producao.';
+      err.message = `${err.message} - modelo ZapSign nao encontrado. ${hint}`;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -105,7 +121,7 @@ async function criarDocumentoViaUpload(params) {
  * Função principal — decide entre modelo ou upload conforme configuração.
  */
 async function criarDocumento(dadosTicket) {
-  if (dadosTicket.template_id || config.zapsign.templateId) {
+  if (config.zapsign.templateId || dadosTicket.template_id) {
     return criarDocumentoViaModelo(dadosTicket);
   }
 

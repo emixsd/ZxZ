@@ -27,7 +27,7 @@ async function buscarTagsDoTicket(ticketId) {
  * Atualiza ticket: comentário interno + adiciona/remove tags.
  * Mesmo padrão do ZTimer — busca tags atuais, manipula, e seta o array completo.
  */
-async function atualizarTicket(ticketId, { mensagem, comment, tagsAdicionar = [], tagsRemover = [], status }) {
+async function atualizarTicket(ticketId, { mensagem, comment, tagsAdicionar = [], tagsRemover = [], status, uploads = [] }) {
   const body = mensagem || comment || '';
 
   // 1. Buscar tags atuais do ticket
@@ -44,12 +44,18 @@ async function atualizarTicket(ticketId, { mensagem, comment, tagsAdicionar = []
   }
 
   // 4. Montar payload
+  const ticketComment = {
+    body,
+    public: false,
+  };
+
+  if (uploads.length > 0) {
+    ticketComment.uploads = uploads;
+  }
+
   const ticketUpdate = {
     ticket: {
-      comment: {
-        body,
-        public: false,
-      },
+      comment: ticketComment,
       tags: tagsFinal,
     },
   };
@@ -62,7 +68,22 @@ async function atualizarTicket(ticketId, { mensagem, comment, tagsAdicionar = []
   return data;
 }
 
+/**
+ * Faz upload de arquivo no Zendesk e retorna o token para anexar no comentario.
+ */
+async function uploadAttachment(filename, fileBuffer, contentType = 'application/pdf') {
+  const { data } = await zendeskApi.post('/uploads.json', fileBuffer, {
+    params: { filename },
+    headers: {
+      'Content-Type': contentType,
+    },
+  });
+
+  return data.upload?.token;
+}
+
 module.exports = {
   atualizarTicket,
+  uploadAttachment,
   updateTicket: atualizarTicket,
 };

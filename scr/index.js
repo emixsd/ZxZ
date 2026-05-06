@@ -2,8 +2,8 @@ const express = require("express");
 const crypto = require("crypto");
 const rateLimit = require("express-rate-limit");
 const { config } = require("./config");
-const { createDocument } = require("./zapsign");
-const { updateTicket } = require("./zendesk");
+const { createDocument, baixarArquivoAssinado } = require("./zapsign");
+const { updateTicket, uploadAttachment } = require("./zendesk");
 const { auditLog, maskCPF, validateEmail, validateCPF, sendErrorAlert } = require("./utils");
 
 const app = express();
@@ -131,6 +131,16 @@ app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, 
     const doc = await createDocument({ template_id, name, email, cpf, phone, ticket_id });
 
     auditLog("INFO", "document_created", { ticket_id, email });
+    if (Array.isArray(doc.answers)) {
+      auditLog("INFO", "template_variables_filled", {
+        ticket_id,
+        variables: doc.answers.map((answer) => ({
+          variable: answer.variable,
+          value_present: String(answer.value || "").trim().length > 0,
+          value_length: String(answer.value || "").length,
+        })),
+      });
+    }
 
     const signUrl = doc.signers?.[0]?.sign_url;
 
@@ -190,10 +200,41 @@ app.post("/webhook/zapsign", validateZapSignSignature, async (req, res) => {
     res.status(200).json({ status: "ok" });
 
     try {
+      const uploads = [];
+      let signedFileUrl = doc.signed_file || "";
+      let pdfMessage = "\nPDF assinado ainda nao estava disponivel na ZapSign.";
+
+      try {
+        const signedFile = await baixarArquivoAssinado(doc);
+
+        if (signedFile) {
+          signedFileUrl = signedFile.url;
+          const filename = `documento-assinado-ticket-${ticket_id}.pdf`;
+          const uploadToken = await uploadAttachment(filename, signedFile.buffer, 'application/pdf');
+
+          if (uploadToken) {
+            uploads.push(uploadToken);
+            pdfMessage = "\nPDF assinado anexado neste comentario.";
+            auditLog("INFO", "signed_pdf_uploaded", { ticket_id, filename });
+          }
+        }
+      } catch (pdfErr) {
+        pdfMessage = signedFileUrl
+          ? `\nLink temporario do PDF assinado: ${signedFileUrl}`
+          : "\nFalha ao anexar o PDF assinado automaticamente.";
+        auditLog("ERROR", "signed_pdf_upload_failed", {
+          ticket_id,
+          error: pdfErr.message,
+          status: pdfErr.response?.status,
+          response: pdfErr.response?.data,
+        });
+      }
+
       await updateTicket(ticket_id, {
-        comment: `✅ Documento assinado por ${signer_email}.`,
+        comment: `✅ Documento assinado por ${signer_email}.${pdfMessage}`,
         tagsAdicionar: ["documento_assinado"],
         tagsRemover: ["documento_enviado"],
+        uploads,
       });
       auditLog("INFO", "ticket_updated_signed", { ticket_id, signer_email });
     } catch (err) {

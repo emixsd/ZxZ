@@ -105,7 +105,9 @@ app.post("/webhook/zendesk", webhookLimiter, validateWebhookSecret, async (req, 
   if (!name || name.trim().length < 2) errors.push("name inválido");
   if (!email || !validateEmail(email)) errors.push("email inválido");
   if (!cpf || !validateCPF(cpf)) errors.push("CPF inválido");
-  if (!template_id) errors.push("template_id é obrigatório");
+  if (!template_id && !config.zapsign.templateId && !config.zapsign.pdfUrl) {
+    errors.push("template_id e obrigatorio quando ZAPSIGN_TEMPLATE_ID ou ZAPSIGN_PDF_URL nao estiver configurado");
+  }
 
   if (errors.length > 0) {
     processando.delete(ticket_id);
